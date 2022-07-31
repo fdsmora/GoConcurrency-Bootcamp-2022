@@ -30,7 +30,7 @@ func (l LocalStorage) Write(pokemons <-chan models.Pokemon) error {
 	return nil
 }
 
-func (l LocalStorage) Read() ([]models.Pokemon, error) {
+func (l LocalStorage) Read() ([]<-chan models.Pokemon, error) {
 	file, fErr := os.Open(filePath)
 	defer file.Close()
 	if fErr != nil {
@@ -43,12 +43,12 @@ func (l LocalStorage) Read() ([]models.Pokemon, error) {
 		return nil, rErr
 	}
 
-	pokemons, err := parseCSVData(records)
+	inChannels, err := parseCSVData(records)
 	if err != nil {
 		return nil, err
 	}
 
-	return pokemons, nil
+	return inChannels, nil
 }
 
 func buildRecords(pokemons <-chan models.Pokemon) [][]string {
@@ -68,39 +68,95 @@ func buildRecords(pokemons <-chan models.Pokemon) [][]string {
 	return records
 }
 
-func parseCSVData(records [][]string) ([]models.Pokemon, error) {
-	var pokemons []models.Pokemon
-	for i, record := range records {
-		if i == 0 {
-			continue
-		}
+func parseCSVData(records [][]string) ([]<-chan models.Pokemon, error) {
+	var (
+		inChannels []<-chan models.Pokemon
 
-		id, err := strconv.Atoi(record[0])
-		if err != nil {
-			return nil, err
-		}
+		//wg = sync.WaitGroup{}
+		totalRecords = len(records) - 1 // discount headers
+	)
 
-		height, err := strconv.Atoi(record[2])
-		if err != nil {
-			return nil, err
-		}
-
-		weight, err := strconv.Atoi(record[3])
-		if err != nil {
-			return nil, err
-		}
-
-		pokemon := models.Pokemon{
-			ID:              id,
-			Name:            record[1],
-			Height:          height,
-			Weight:          weight,
-			Abilities:       nil,
-			FlatAbilityURLs: record[4],
-			EffectEntries:   nil,
-		}
-		pokemons = append(pokemons, pokemon)
+	if totalRecords <= 0 {
+		return inChannels, nil
 	}
 
-	return pokemons, nil
+	pokeWorker := func(records [][]string, start, end int) (<-chan models.Pokemon, error) {
+		in := make(chan models.Pokemon)
+		go func(in chan<- models.Pokemon) error {
+			fmt.Println("about to start parsing segment from", start, "to", end)
+
+			for i := start; i < end; i++ {
+				pokemon, err := parsePokemon(records[i])
+				fmt.Println("pokemon parsed")
+				if err != nil {
+					fmt.Printf("Error found: %s\n", err.Error())
+					return err
+				}
+				fmt.Println("about to push pokemon into channel")
+				in <- pokemon
+				fmt.Println("pokemon pushed into channel")
+			}
+			close(in)
+			fmt.Println("channel closed")
+			return nil
+		}(in)
+		return in, nil
+	}
+
+	inChannels = []<-chan models.Pokemon{}
+
+	if totalRecords >= 3 {
+		part := totalRecords / 3
+		inCh1, err := pokeWorker(records, 1, part+1)
+		if err != nil {
+			return nil, err
+		}
+		inCh2, err := pokeWorker(records, part+1, part*2+1)
+		if err != nil {
+			return nil, err
+		}
+		inCh3, err := pokeWorker(records, part*2+1, len(records))
+		if err != nil {
+			return nil, err
+		}
+		inChannels = append(inChannels, inCh1, inCh2, inCh3)
+	} else {
+
+		inCh1, err := pokeWorker(records, 1, len(records))
+		if err != nil {
+			return nil, err
+		}
+		inChannels = append(inChannels, inCh1)
+	}
+
+	return inChannels, nil
+}
+
+func parsePokemon(record []string) (pokemon models.Pokemon, err error) {
+	id, err := strconv.Atoi(record[0])
+	if err != nil {
+		return
+	}
+
+	height, err := strconv.Atoi(record[2])
+	if err != nil {
+		return
+	}
+
+	weight, err := strconv.Atoi(record[3])
+	if err != nil {
+		return
+	}
+
+	pokemon = models.Pokemon{
+		ID:              id,
+		Name:            record[1],
+		Height:          height,
+		Weight:          weight,
+		Abilities:       nil,
+		FlatAbilityURLs: record[4],
+		EffectEntries:   nil,
+	}
+
+	return
 }

@@ -63,5 +63,6 @@ func (f Fetcher) pokeGenerator(from, to int) <-chan models.Pokemon {
 		wg.Wait()
 		close(pokemons)
 	}()
+
 	return pokemons
 }
