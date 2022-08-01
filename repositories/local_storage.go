@@ -105,6 +105,7 @@ func parseCSVData(records [][]string) ([]<-chan models.Pokemon, error) {
 
 	inChannels = []<-chan models.Pokemon{}
 
+	// If more than 3 pokemons parse CSV in 3 segments, otherwise use 1 worker for whole CSV
 	if totalRecords >= 3 {
 		part := totalRecords / 3
 		inCh1, err := pokeWorker(records, 1, part+1)
@@ -121,7 +122,6 @@ func parseCSVData(records [][]string) ([]<-chan models.Pokemon, error) {
 		}
 		inChannels = append(inChannels, inCh1, inCh2, inCh3)
 	} else {
-
 		inCh1, err := pokeWorker(records, 1, len(records))
 		if err != nil {
 			return nil, err
