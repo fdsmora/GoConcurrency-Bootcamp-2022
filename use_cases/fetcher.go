@@ -1,6 +1,7 @@
 package use_cases
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 
@@ -12,7 +13,7 @@ type api interface {
 }
 
 type writer interface {
-	Write(pokemons <-chan models.Pokemon) error
+	Write(pokemons []models.Pokemon) error
 }
 
 type Fetcher struct {
@@ -20,17 +21,47 @@ type Fetcher struct {
 	storage writer
 }
 
+type PokeError struct {
+	Err error
+}
+
 func NewFetcher(api api, storage writer) Fetcher {
 	return Fetcher{api, storage}
 }
 
 func (f Fetcher) Fetch(from, to int) error {
-	return f.storage.Write(
-		f.pokeGenerator(from, to),
+	if from > to {
+		return fmt.Errorf("'to' must be greater than or equal to 'from'")
+	}
+
+	var (
+		n        = to - from + 1
+		pokemons = make([]models.Pokemon, n)
+		i        int
+		errCh    = make(chan PokeError)
 	)
+
+	pokeGenerator := f.pokeGenerator(from, to, errCh)
+
+	for i = 0; i < n; i++ {
+		select {
+		case p, ok := <-pokeGenerator:
+			if !ok {
+				break
+			}
+			pokemons[i] = p
+		case pokeErr, ok := <-errCh:
+			if !ok {
+				break
+			}
+			return fmt.Errorf("error fetching pokemon from endpoint: %w", pokeErr.Err)
+		}
+	}
+
+	return f.storage.Write(pokemons)
 }
 
-func (f Fetcher) pokeGenerator(from, to int) <-chan models.Pokemon {
+func (f Fetcher) pokeGenerator(from, to int, errCh chan<- PokeError) <-chan models.Pokemon {
 	var (
 		n        = to - from + 1
 		pokemons = make(chan models.Pokemon, n)
@@ -40,13 +71,13 @@ func (f Fetcher) pokeGenerator(from, to int) <-chan models.Pokemon {
 	wg.Add(n)
 
 	for i := from; i <= to; i++ {
-		id := i
-		go func() error {
+		go func(id int) {
 			defer wg.Done()
 
 			pokemon, err := f.api.FetchPokemon(id)
 			if err != nil {
-				return err
+				errCh <- PokeError{err}
+				return
 			}
 
 			var flatAbilities []string
@@ -55,13 +86,13 @@ func (f Fetcher) pokeGenerator(from, to int) <-chan models.Pokemon {
 			}
 			pokemon.FlatAbilityURLs = strings.Join(flatAbilities, "|")
 			pokemons <- pokemon
-			return nil
-		}()
+		}(i)
 	}
 
 	go func() {
 		wg.Wait()
 		close(pokemons)
+		errCh <- PokeError{}
 	}()
 
 	return pokemons

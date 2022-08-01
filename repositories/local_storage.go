@@ -14,7 +14,7 @@ type LocalStorage struct{}
 
 const filePath = "resources/pokemons.csv"
 
-func (l LocalStorage) Write(pokemons <-chan models.Pokemon) error {
+func (l LocalStorage) Write(pokemons []models.Pokemon) error {
 	file, fErr := os.Create(filePath)
 	defer file.Close()
 	if fErr != nil {
@@ -51,11 +51,11 @@ func (l LocalStorage) Read() ([]<-chan models.Pokemon, error) {
 	return inChannels, nil
 }
 
-func buildRecords(pokemons <-chan models.Pokemon) [][]string {
+func buildRecords(pokemons []models.Pokemon) [][]string {
 	headers := []string{"id", "name", "height", "weight", "flat_abilities"}
 	records := [][]string{headers}
 
-	for p := range pokemons {
+	for _, p := range pokemons {
 		record := fmt.Sprintf("%d,%s,%d,%d,%s",
 			p.ID,
 			p.Name,
