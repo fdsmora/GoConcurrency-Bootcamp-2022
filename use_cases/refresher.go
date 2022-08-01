@@ -32,17 +32,35 @@ func NewRefresher(reader reader, saver saver, fetcher fetcher) Refresher {
 }
 
 func (r Refresher) Refresh(ctx context.Context) error {
-	csvChannels, err := r.Read()
+	csvReaderChans, err := r.Read()
 	if err != nil {
 		return fmt.Errorf("reading pokemons from CSV file: %w", err)
 	}
 
-	wg := sync.WaitGroup{}
-	wg.Add(len(csvChannels))
+	fanInChan := doFanIn(csvReaderChans)
 
+	// fan-out
+	pokemonsWithAbilitiesFanInChan, err := r.loadAbilitiesWithFanOutFanIn(fanInChan)
+
+	pokemons := []models.Pokemon{}
+	for p := range pokemonsWithAbilitiesFanInChan {
+		pokemons = append(pokemons, p)
+	}
+
+	if err := r.Save(ctx, pokemons); err != nil {
+		return fmt.Errorf("saving pokemons in cache: %w", err)
+	}
+
+	return nil
+}
+
+func doFanIn(inputChans []<-chan models.Pokemon) <-chan models.Pokemon {
 	afterReadFanInChan := make(chan models.Pokemon)
 
-	for _, in := range csvChannels {
+	wg := sync.WaitGroup{}
+	wg.Add(len(inputChans))
+
+	for _, in := range inputChans {
 		go func(in <-chan models.Pokemon) {
 			for {
 				pokemon, ok := <-in
@@ -61,20 +79,24 @@ func (r Refresher) Refresh(ctx context.Context) error {
 		close(afterReadFanInChan)
 	}()
 
-	// Now fan out to load abilities from 3 concurrent workers
+	return afterReadFanInChan
+}
 
-	var (
-		fanout1 = makeFanOut(afterReadFanInChan)
-		fanout2 = makeFanOut(afterReadFanInChan)
-		fanout3 = makeFanOut(afterReadFanInChan)
-	)
+func (r Refresher) loadAbilitiesWithFanOutFanIn(fanInChan <-chan models.Pokemon) (
+	<-chan models.Pokemon, error) {
 
-	fanOuts := []<-chan models.Pokemon{fanout1, fanout2, fanout3}
+	fanOuts := []<-chan models.Pokemon{
+		makeFanOut(fanInChan),
+		makeFanOut(fanInChan),
+		makeFanOut(fanInChan),
+	}
+
 
 	pokemonsFanIn := make(chan models.Pokemon) // For multiplexing again
 
 	wg2 := sync.WaitGroup{}
 	wg2.Add(len(fanOuts))
+
 	for _, fanOut := range fanOuts {
 		go func(fanOut <-chan models.Pokemon) error {
 			defer wg2.Done()
@@ -122,17 +144,7 @@ func (r Refresher) Refresh(ctx context.Context) error {
 		}
 	}() */
 
-	pokemons := []models.Pokemon{}
-	for p := range pokemonsFanIn {
-		pokemons = append(pokemons, p)
-
-	}
-
-	if err := r.Save(ctx, pokemons); err != nil {
-		return fmt.Errorf("saving pokemons in cache: %w", err)
-	}
-
-	return nil
+	return pokemonsFanIn, nil
 }
 
 func makeFanOut(source <-chan models.Pokemon) <-chan models.Pokemon {
