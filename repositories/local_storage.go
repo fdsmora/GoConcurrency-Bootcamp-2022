@@ -54,6 +54,7 @@ func (l LocalStorage) Read() ([]models.Pokemon, error) {
 func buildRecords(pokemons []models.Pokemon) [][]string {
 	headers := []string{"id", "name", "height", "weight", "flat_abilities"}
 	records := [][]string{headers}
+
 	for _, p := range pokemons {
 		record := fmt.Sprintf("%d,%s,%d,%d,%s",
 			p.ID,

@@ -16,8 +16,8 @@ func Init() *gin.Engine {
 	cache := repositories.NewCache()
 
 	refresher := use_cases.NewRefresher(storage, cache, api)
-
 	svc := use_cases.NewFetcher(api, storage)
+
 	ctrl := controllers.NewAPI(svc, refresher, cache)
 
 	r.POST("/api/provide", ctrl.FillCSV)
