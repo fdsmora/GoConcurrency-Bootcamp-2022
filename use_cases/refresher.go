@@ -55,17 +55,13 @@ func (r Refresher) Refresh(ctx context.Context) error {
 
 func pokeGenerator(pokemons []models.Pokemon) <-chan models.Pokemon {
 	pokeChan := make(chan models.Pokemon)
-	wg := sync.WaitGroup{}
-	wg.Add(len(pokemons))
-	for _, p := range pokemons {
-		go func(p models.Pokemon) {
-			pokeChan <- p
-			wg.Done()
-		}(p)
-	}
+
 	go func() {
-		wg.Wait()
-		close(pokeChan)
+		defer close(pokeChan)
+
+		for _, p := range pokemons {
+			pokeChan <- p
+		}
 	}()
 
 	return pokeChan
@@ -89,12 +85,12 @@ func (r Refresher) loadAbilitiesWithFanOutFanIn(source <-chan models.Pokemon) (
 	/* An alternative implementation of the 'fanout' without using a select statement.
 	Each goroutinge triggered in each loop is equivalent for a case in the select. */
 	for _, fanOut := range fanOuts {
-		go func(fanOut <-chan models.Pokemon) {
+		go func(fanOut <-chan models.Pokemon, pokemonsFanIn chan models.Pokemon) {
 			defer wg2.Done()
 			for p := range fanOut {
 				pokemonsFanIn <- p
 			}
-		}(fanOut)
+		}(fanOut, pokemonsFanIn)
 	}
 
 	go func() {
