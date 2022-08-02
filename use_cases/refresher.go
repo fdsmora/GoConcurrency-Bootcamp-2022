@@ -10,7 +10,7 @@ import (
 )
 
 type reader interface {
-	Read() ([]<-chan models.Pokemon, error)
+	Read() ([]models.Pokemon, error)
 }
 
 type saver interface {
@@ -32,19 +32,20 @@ func NewRefresher(reader reader, saver saver, fetcher fetcher) Refresher {
 }
 
 func (r Refresher) Refresh(ctx context.Context) error {
-	csvReaderChans, err := r.Read()
+	pokemonsFromFile, err := r.Read()
 	if err != nil {
 		return fmt.Errorf("reading pokemons from CSV file: %w", err)
 	}
 
-	fanInChan := doFanIn(csvReaderChans)
 
-	// fan-out
-	pokemonsWithAbilitiesFanInChan, err := r.loadAbilitiesWithFanOutFanIn(fanInChan)
+	// fan-in/fan-out
 
-	pokemons := []models.Pokemon{}
-	for p := range pokemonsWithAbilitiesFanInChan {
-		pokemons = append(pokemons, p)
+	sourceChan := pokeGenerator(pokemonsFromFile)
+	pokemonsWithAbilitiesFanInChan, errChan := r.loadAbilitiesWithFanOutFanIn(sourceChan)
+
+	pokemons, err := createPokemonList(pokemonsWithAbilitiesFanInChan, errChan)
+	if err != nil {
+		return err
 	}
 
 	if err := r.Save(ctx, pokemons); err != nil {
@@ -52,6 +53,24 @@ func (r Refresher) Refresh(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func pokeGenerator(pokemons []models.Pokemon) <-chan models.Pokemon {
+	pokeChan := make(chan models.Pokemon)
+	wg := sync.WaitGroup{}
+	wg.Add(len(pokemons))
+	for _, p := range pokemons {
+		go func(p models.Pokemon) {
+			pokeChan <- p
+			wg.Done()
+		}(p)
+	}
+	go func() {
+		wg.Wait()
+		close(pokeChan)
+	}()
+
+	return pokeChan
 }
 
 func doFanIn(inputChans []<-chan models.Pokemon) <-chan models.Pokemon {
@@ -82,40 +101,35 @@ func doFanIn(inputChans []<-chan models.Pokemon) <-chan models.Pokemon {
 	return afterReadFanInChan
 }
 
-func (r Refresher) loadAbilitiesWithFanOutFanIn(fanInChan <-chan models.Pokemon) (
-	<-chan models.Pokemon, error) {
+func (r Refresher) loadAbilitiesWithFanOutFanIn(source <-chan models.Pokemon) (
+	<-chan models.Pokemon, <-chan PokeError) {
+
+
+	errChan := make(chan PokeError)
 
 	fanOuts := []<-chan models.Pokemon{
-		makeFanOut(fanInChan),
-		makeFanOut(fanInChan),
-		makeFanOut(fanInChan),
+		r.makeFanOut(source, errChan),
+		r.makeFanOut(source, errChan),
+		r.makeFanOut(source, errChan),
 	}
-
-
-	pokemonsFanIn := make(chan models.Pokemon) // For multiplexing again
+	pokemonsFanIn := make(chan models.Pokemon) // For multiplexing resulting pokemons
 
 	wg2 := sync.WaitGroup{}
 	wg2.Add(len(fanOuts))
 
 	for _, fanOut := range fanOuts {
-		go func(fanOut <-chan models.Pokemon) error {
+		go func(fanOut <-chan models.Pokemon) {
 			defer wg2.Done()
-			for pokemon := range fanOut {
-				fmt.Println("Popped pokemon frm fanOut. About to load abilities")
-				pokemon, err := r.loadPokemonWithAbility(pokemon)
-				if err != nil {
-					return fmt.Errorf("fetching ability from poke endpoint: %w", err)
-				}
-				pokemonsFanIn <- pokemon
-				fmt.Println("pokemon sent over pokemonsFanIn")
+			for p := range fanOut {
+				pokemonsFanIn <- p
 			}
-			return nil
 		}(fanOut)
 	}
 
 	go func() {
 		wg2.Wait()
 		close(pokemonsFanIn)
+		close(errChan)
 	}()
 
 	// Tried first this approach but I didn't find a way to exit the for loop, causing a goroutine leak
@@ -144,21 +158,33 @@ func (r Refresher) loadAbilitiesWithFanOutFanIn(fanInChan <-chan models.Pokemon)
 		}
 	}() */
 
-	return pokemonsFanIn, nil
+	return pokemonsFanIn, errChan
 }
 
-func makeFanOut(source <-chan models.Pokemon) <-chan models.Pokemon {
-	fanOut := make(chan models.Pokemon)
+func (r Refresher) makeFanOut(source <-chan models.Pokemon, errChan chan<- PokeError) <-chan models.Pokemon {
+	var (
+		fanOut = make(chan models.Pokemon)
+		err    error
+	)
+
 	go func() {
 		defer close(fanOut)
 		for p := range source {
+			p, err = r.fetchPokemonWithAbility(p)
+			if err != nil {
+				errChan <- PokeError{err}
+
+				return // abort processing after any error
+			}
 			fanOut <- p
+
 		}
 	}()
+
 	return fanOut
 }
 
-func (r Refresher) loadPokemonWithAbility(p models.Pokemon) (models.Pokemon, error) {
+func (r Refresher) fetchPokemonWithAbility(p models.Pokemon) (models.Pokemon, error) {
 	urls := strings.Split(p.FlatAbilityURLs, "|")
 	var abilities []string
 	for _, url := range urls {
@@ -174,4 +200,19 @@ func (r Refresher) loadPokemonWithAbility(p models.Pokemon) (models.Pokemon, err
 
 	p.EffectEntries = abilities
 	return p, nil
+}
+
+func createPokemonList(source <-chan models.Pokemon, errChan <-chan PokeError) ([]models.Pokemon, error) {
+	pokemons := []models.Pokemon{}
+	for {
+		select {
+		case p, ok := <-source:
+			if !ok {
+				return pokemons, nil
+			}
+			pokemons = append(pokemons, p)
+		case pokeErr := <-errChan:
+			return nil, pokeErr.Err
+		}
+	}
 }

@@ -58,6 +58,7 @@ func (api API) FillCSV(c *gin.Context) {
 //RefreshCache feeds the csv data and save in redis
 func (api API) RefreshCache(c *gin.Context) {
 	if err := api.Refresh(c); err != nil {
+		fmt.Println("Internal server Error:", err.Error())
 		c.Status(http.StatusInternalServerError)
 		return
 	}
