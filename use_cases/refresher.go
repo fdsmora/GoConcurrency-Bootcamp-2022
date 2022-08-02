@@ -39,6 +39,7 @@ func (r Refresher) Refresh(ctx context.Context) error {
 
 	// fan-in/fan-out
 	sourceChan := pokeGenerator(pokemonsFromFile)
+
 	pokemonsWithAbilitiesFanInChan, errChan := r.loadAbilitiesWithFanOutFanIn(sourceChan)
 
 	pokemons, err := createPokemonList(pokemonsWithAbilitiesFanInChan, errChan)
@@ -153,7 +154,9 @@ func createPokemonList(source <-chan models.Pokemon, errChan <-chan PokeError) (
 			}
 			pokemons = append(pokemons, p)
 		case pokeErr := <-errChan:
-			return nil, pokeErr.Err
+			if pokeErr.Err != nil {
+				return nil, pokeErr.Err
+			}
 		}
 	}
 }
