@@ -94,5 +94,6 @@ func (f Fetcher) pokeGenerator(from, to int, errCh chan<- PokeError) <-chan mode
 		close(pokemons)
 		errCh <- PokeError{}
 	}()
+
 	return pokemons
 }
