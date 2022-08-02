@@ -86,6 +86,8 @@ func (r Refresher) loadAbilitiesWithFanOutFanIn(source <-chan models.Pokemon) (
 	wg2 := sync.WaitGroup{}
 	wg2.Add(len(fanOuts))
 
+	/* An alternative implementation of the 'fanout' without using a select statement.
+	Each goroutinge triggered in each loop is equivalent for a case in the select. */
 	for _, fanOut := range fanOuts {
 		go func(fanOut <-chan models.Pokemon) {
 			defer wg2.Done()
