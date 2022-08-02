@@ -37,9 +37,7 @@ func (r Refresher) Refresh(ctx context.Context) error {
 		return fmt.Errorf("reading pokemons from CSV file: %w", err)
 	}
 
-
 	// fan-in/fan-out
-
 	sourceChan := pokeGenerator(pokemonsFromFile)
 	pokemonsWithAbilitiesFanInChan, errChan := r.loadAbilitiesWithFanOutFanIn(sourceChan)
 
@@ -73,37 +71,8 @@ func pokeGenerator(pokemons []models.Pokemon) <-chan models.Pokemon {
 	return pokeChan
 }
 
-func doFanIn(inputChans []<-chan models.Pokemon) <-chan models.Pokemon {
-	afterReadFanInChan := make(chan models.Pokemon)
-
-	wg := sync.WaitGroup{}
-	wg.Add(len(inputChans))
-
-	for _, in := range inputChans {
-		go func(in <-chan models.Pokemon) {
-			for {
-				pokemon, ok := <-in
-
-				if !ok {
-					wg.Done()
-					break
-				}
-
-				afterReadFanInChan <- pokemon
-			}
-		}(in)
-	}
-	go func() {
-		wg.Wait()
-		close(afterReadFanInChan)
-	}()
-
-	return afterReadFanInChan
-}
-
 func (r Refresher) loadAbilitiesWithFanOutFanIn(source <-chan models.Pokemon) (
 	<-chan models.Pokemon, <-chan PokeError) {
-
 
 	errChan := make(chan PokeError)
 
@@ -131,32 +100,6 @@ func (r Refresher) loadAbilitiesWithFanOutFanIn(source <-chan models.Pokemon) (
 		close(pokemonsFanIn)
 		close(errChan)
 	}()
-
-	// Tried first this approach but I didn't find a way to exit the for loop, causing a goroutine leak
-	/* 	go func() error {
-		for {
-			select {
-			case pokemon := <-fanout1:
-				pokemon, err := r.loadPokemonWithAbility(pokemon)
-				if err != nil {
-					return fmt.Errorf("fetching ability from poke endpoint: %w", err)
-				}
-				pokemonsFanIn <- pokemon
-			case pokemon := <-fanout2:
-				pokemon, err = r.loadPokemonWithAbility(pokemon)
-				if err != nil {
-					return fmt.Errorf("fetching ability from poke endpoint: %w", err)
-				}
-				pokemonsFanIn <- pokemon
-			case pokemon := <-fanout3:
-				pokemon, err := r.loadPokemonWithAbility(pokemon)
-				if err != nil {
-					return fmt.Errorf("fetching ability from poke endpoint: %w", err)
-				}
-				pokemonsFanIn <- pokemon
-			}
-		}
-	}() */
 
 	return pokemonsFanIn, errChan
 }
